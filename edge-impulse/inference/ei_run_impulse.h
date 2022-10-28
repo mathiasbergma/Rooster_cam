@@ -25,9 +25,15 @@
 
 /* Include ----------------------------------------------------------------- */
 #include <cstdint>
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
 
 void ei_start_impulse(bool continuous, bool debug, bool use_max_uart_speed = false);
-void ei_run_impulse(void);
+//void ei_run_impulse(void);
+int ei_run_impulse(SemaphoreHandle_t xSem);
 void ei_stop_impulse(void);
 bool is_inference_running(void);
 

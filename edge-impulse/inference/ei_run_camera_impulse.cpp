@@ -36,6 +36,10 @@
 
 #include "esp_timer.h"
 
+
+
+
+
 #define DWORD_ALIGN_PTR(a)   ((a & 0x3) ?(((uintptr_t)a + 0x4) & ~(uintptr_t)0x3) : a)
 
 typedef enum {
@@ -60,6 +64,7 @@ static ei_device_snapshot_resolutions_t fb_resolution;
 static bool resize_required = false;
 static uint32_t inference_delay;
 
+
 static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr)
 {
     // we already have a RGB888 buffer, so recalculate offset into pixel index
@@ -80,15 +85,18 @@ static int ei_camera_get_data(size_t offset, size_t length, float *out_ptr)
     return 0;
 }
 
-void ei_run_impulse(void)
+
+int ei_run_impulse(SemaphoreHandle_t xSem)
 {
+    int inf_cnt = 0;
+
     switch(state) {
         case INFERENCE_STOPPED:
             // nothing to do
-            return;
+            return -1;
         case INFERENCE_WAITING:
             if(ei_read_timer_ms() < (last_inference_ts + inference_delay)) {
-                return;
+                return -1;
             }
             state = INFERENCE_DATA_READY;
             break;
@@ -111,27 +119,36 @@ void ei_run_impulse(void)
 
     if(camera->ei_camera_capture_jpeg(&jpeg_image, &jpeg_image_size) == false) {
         ei_printf("ERR: Failed to take a snapshot!\n");
-        return;
+        return -1;
     }
+    xSemaphoreGive(xSem);
+
+    //pic_buffer->jpeg_image = (uint8_t*)ei_malloc(jpeg_image_size);
+    //memcpy(pic_buffer->jpeg_image, jpeg_image, jpeg_image_size);
+    //pic_buffer->jpeg_image_size = jpeg_image_size;
+    //xQueueSend(framO, &pic_buffer, portMAX_DELAY);
+
+    //pic_buffer->jpeg_image = jpeg_image;
+    //pic_buffer->jpeg_image_size = &jpeg_image_size;
 
     snapshot_buf = (uint8_t*)ei_malloc(snapshot_buf_size);
 
     // check if allocation was successful
     if(snapshot_buf == nullptr) {
         ei_printf("ERR: Failed to allocate snapshot buffer!\n");
-        return;
+        return -1;
     }
 
     if(camera->ei_camera_jpeg_to_rgb888(jpeg_image, jpeg_image_size, snapshot_buf) == false) {
         ei_printf("ERR: Failed to decode JPEG image\n");
         ei_free(snapshot_buf);
         ei_free(jpeg_image);
-        return;
+        return -1;
     }
-
+    
     ei_free(jpeg_image);
     jpeg_image_size = 0;
-
+    
     int64_t fr_start = esp_timer_get_time();
 
     if (resize_required) {
@@ -172,7 +189,7 @@ void ei_run_impulse(void)
     if (ei_error != EI_IMPULSE_OK) {
         ei_printf("ERR: Failed to run impulse (%d)\n", ei_error);
         ei_free(snapshot_buf);
-        return;
+        return -1;
     }
     ei_free(snapshot_buf);
 
@@ -187,6 +204,7 @@ void ei_run_impulse(void)
             continue;
         }
         ei_printf("    %s (%f) [ x: %u, y: %u, width: %u, height: %u ]\n", bb.label, bb.value, bb.x, bb.y, bb.width, bb.height);
+        inf_cnt++;
     }
     if (!bb_found) {
         ei_printf("    No objects found\n");
@@ -210,6 +228,9 @@ void ei_run_impulse(void)
     if(continuous_mode == false) {
         ei_printf("Starting inferencing in %d seconds...\n", inference_delay / 1000);
     }
+    
+
+    return inf_cnt;
 }
 
 void ei_start_impulse(bool continuous, bool debug, bool use_max_uart_speed)
@@ -236,7 +257,7 @@ void ei_start_impulse(bool continuous, bool debug, bool use_max_uart_speed)
         ei_printf("Failed to init camera, check if camera is connected!\n");
         return;
     }
-
+    
     snapshot_buf_size = fb_resolution.width * fb_resolution.height * 3;
 
     // summary of inferencing settings (from model_metadata.h)
@@ -250,7 +271,7 @@ void ei_start_impulse(bool continuous, bool debug, bool use_max_uart_speed)
         state = INFERENCE_DATA_READY;
     }
     else {
-        inference_delay = 2000;
+        inference_delay = 0;
         state = INFERENCE_WAITING;
         ei_printf("Starting inferencing in %d seconds...\n", inference_delay / 1000);
     }
@@ -258,17 +279,17 @@ void ei_start_impulse(bool continuous, bool debug, bool use_max_uart_speed)
     if (debug_mode) {
         ei_printf("OK\r\n");
         ei_sleep(100);
-        dev->set_max_data_output_baudrate();
+        //dev->set_max_data_output_baudrate();
         ei_sleep(100);
     }
-
+    /*
     while(!ei_user_invoke_stop()) {
         ei_run_impulse();
         ei_sleep(1);
     }
 
     ei_stop_impulse();
-
+    */
     if (debug_mode) {
         ei_printf("\r\nOK\r\n");
         ei_sleep(100);
